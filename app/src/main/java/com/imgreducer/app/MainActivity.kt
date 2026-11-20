@@ -41,12 +41,12 @@ class MainActivity : AppCompatActivity() {
     private val pickImages = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
         selectedUris = if (uris.size > maxFiles) {
-            Toast.makeText(this, "အများဆုံး ပုံ $maxFiles ပုံပဲ ယူထားပါသည်", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Maximum $maxFiles images can be selected at once", Toast.LENGTH_LONG).show()
             uris.take(maxFiles)
         } else {
             uris
         }
-        tvStatus.text = "ရွေးထားသောပုံ: ${selectedUris.size} / $maxFiles ပုံ"
+        tvStatus.text = "Selected: ${selectedUris.size} / $maxFiles images"
         tvResult.text = ""
     }
 
@@ -85,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(btnPick)
 
         tvStatus = TextView(this).apply {
-            text = "တစ်ကြိမ်လျှင် အများဆုံး ပုံ ၃၀ အထိ ရွေးနိုင်ပါသည်"
+            text = "You can choose up to 30 images at once"
             setTextColor(Color.parseColor("#94A3B8"))
             gravity = Gravity.CENTER
             setPadding(0, 12, 0, 16)
@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
             adapter = ArrayAdapter(
                 this@MainActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                listOf("JPEG (.jpg)", "WebP (.webp)", "PNG (.png)")
+                listOf("JPEG (.jpg) — Standard", "WebP (.webp) — Best Compression", "PNG (.png) — Transparent")
             )
             setBackgroundColor(Color.parseColor("#334155"))
         }
@@ -152,9 +152,9 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(p0: AdapterView<*>?) {}
         }
 
-        container.addView(label("Target File Size in KB (မထည့်လည်းရ)"))
+        container.addView(label("Target File Size in KB (Optional)"))
         etTargetKb = EditText(this).apply {
-            hint = "ဥပမာ 200"
+            hint = "e.g., 200 (Compress to under 200 KB)"
             inputType = InputType.TYPE_CLASS_NUMBER
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
@@ -201,7 +201,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startCompression() {
         if (selectedUris.isEmpty()) {
-            Toast.makeText(this, "အရင်ဆုံး ပုံရွေးပါ", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Please select images first", Toast.LENGTH_SHORT).show()
             return
         }
         btnCompress.isEnabled = false
@@ -249,8 +249,94 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread {
                 btnCompress.isEnabled = true
-                val totalKb = String.format("%.1f KB", totalBytes / 1024.0)
-                tvResult.text = "ပြီးပါပြီ! ပုံ $successCount ပုံကို Gallery (Pictures/ImageReducer) ထဲ သိမ်းပြီးပါပြီ။\nစုစုပေါင်းဆိုဒ်: $totalKb"
+                val totalSizeFormatted = if (totalBytes < 1048576) {
+                    String.format("%.1f KB", totalBytes / 1024.0)
+                } else {
+                    String.format("%.2f MB", totalBytes / 1048576.0)
+                }
+                tvResult.text = "Success! Saved $successCount images to Gallery (Pictures/ImageReducer).\nTotal Output Size: $totalSizeFormatted"
+            }
+        }
+    }
+
+    private fun calcSize(ow: Int, oh: Int, idx: Int, cw: Int, ch: Int, keepRatio: Boolean): Pair<Int, Int> {
+        val presets = mapOf(1 to 3840, 2 to 1920, 3 to 1280, 5 to 800, 6 to 600, 7 to 400)
+        return when {
+            idx == 0 -> ow to oh
+            idx == 4 -> 1080 to 1080
+            idx == 8 -> {
+                if (cw <= 0 && ch <= 0) ow to oh
+                else if (keepRatio) {
+                    when {
+                        cw > 0 && ch <= 0 -> cw to (oh.toFloat() * cw / ow).roundToInt()
+                        ch > 0 && cw <= 0 -> (ow.toFloat() * ch / oh).roundToInt() to ch
+                        else -> {
+                            val r = min(cw.toFloat() / ow, ch.toFloat() / oh)
+                            (ow * r).roundToInt() to (oh * r).roundToInt()
+                        }
+                    }
+                } else (if (cw > 0) cw else ow) to (if (ch > 0) ch else oh)
+            }
+            else -> {
+                val maxW = presets[idx] ?: ow
+                if (ow > maxW) maxW to (oh.toFloat() * maxW / ow).roundToInt() else ow to oh
+            }
+        }
+    }
+
+    private fun compressBitmap(bmp: Bitmap, format: Bitmap.CompressFormat, quality: Int, targetKb: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        if (targetKb <= 0) {
+            bmp.compress(format, quality, out)
+            return out.toByteArray()
+        }
+        val targetBytes = targetKb * 1024
+        if (format == Bitmap.CompressFormat.PNG) {
+            var cur = bmp
+            var scale = 1f
+            cur.compress(format, 100, out)
+            while (out.size() > targetBytes && scale > 0.2f) {
+                scale *= 0.8f
+                out.reset()
+                cur = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).roundToInt().coerceAtLeast(1), (bmp.height * scale).roundToInt().coerceAtLeast(1), true)
+                cur.compress(format, 100, out)
+            }
+            return out.toByteArray()
+        }
+        var minQ = 5
+        var maxQ = 98
+        var best: ByteArray? = null
+        repeat(7) {
+            val mid = (minQ + maxQ) / 2
+            out.reset()
+            bmp.compress(format, mid, out)
+            if (out.size() <= targetBytes) {
+                best = out.toByteArray()
+                minQ = mid
+            } else {
+                maxQ = mid
+            }
+        }
+        return best ?: run {
+            out.reset()
+            bmp.compress(format, 5, out)
+            out.toByteArray()
+        }
+    }
+
+    private fun saveToGallery(bytes: ByteArray, filename: String, mime: String) {
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+            put(MediaStore.Images.Media.MIME_TYPE, mime)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ImageReducer")
+            }
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
+        contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+    }
+}
+ (Pictures/ImageReducer) ထဲ သိမ်းပြီးပါပြီ။\nစုစုပေါင်းဆိုဒ်: $totalKb"
             }
         }
     }
