@@ -1,5 +1,6 @@
 package com.imgreducer.app
 
+import com.startapp.sdk.adsbase.StartAppAd
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -59,6 +60,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(40, 60, 40, 60)
         }
         root.addView(container)
+        StartAppAd.showAd(this)
+
 
         fun label(text: String) = TextView(this).apply {
             this.text = text
